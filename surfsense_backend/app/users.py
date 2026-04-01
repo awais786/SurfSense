@@ -298,7 +298,6 @@ auth_backend = AuthenticationBackend(
 
 fastapi_users = FastAPIUsers[User, uuid.UUID](get_user_manager, [auth_backend])
 
-_jwt_current_active_user = fastapi_users.current_user(active=True)
 _jwt_current_optional_user = fastapi_users.current_user(active=True, optional=True)
 
 

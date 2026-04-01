@@ -1,9 +1,10 @@
 import logging
 import secrets
+import unicodedata
 from datetime import UTC, datetime
 
 from fastapi_users.db import SQLAlchemyUserDatabase
-from fastapi_users.password import PasswordHelper
+from fastapi_users.password import PasswordHelper  # singleton below
 from sqlalchemy import select, update
 from sqlalchemy.exc import IntegrityError
 from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoint
@@ -14,12 +15,15 @@ from app.config import config
 from app.db import User, async_session_maker
 
 logger = logging.getLogger(__name__)
+_password_helper = PasswordHelper()
 
 _DEFAULT_BYPASS_PATHS = ["/health"]
 
 
 def _normalise_email(email: str) -> str:
-    return email.strip().lower()
+    # NFKC normalisation collapses Unicode lookalikes before lowercasing,
+    # preventing homoglyph spoofing (e.g. fullwidth latin chars).
+    return unicodedata.normalize("NFKC", email).strip().lower()
 
 
 def _coerce_bypass_paths(setting) -> list[str]:
@@ -31,7 +35,9 @@ def _coerce_bypass_paths(setting) -> list[str]:
 
 
 def _is_bypass_path(path: str, bypass_paths: list[str]) -> bool:
-    return any(path.startswith(p) for p in bypass_paths)
+    # Match exact path OR a true subpath (e.g. /health/ready) but NOT a path that
+    # merely starts with the same characters (e.g. /healthz must NOT bypass /health).
+    return any(path == p or path.startswith(p.rstrip("/") + "/") for p in bypass_paths)
 
 
 class ProxyAuthMiddleware(BaseHTTPMiddleware):
@@ -94,7 +100,7 @@ class ProxyAuthMiddleware(BaseHTTPMiddleware):
                 created = False
 
                 if user is None:
-                    hashed_password = PasswordHelper().hash(secrets.token_urlsafe(32))
+                    hashed_password = _password_helper.hash(secrets.token_urlsafe(32))
                     user = User(
                         email=email,
                         hashed_password=hashed_password,

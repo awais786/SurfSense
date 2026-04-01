@@ -316,13 +316,19 @@ app.add_middleware(RequestPerfMiddleware)
 # http.response.start on every body chunk, breaking SSE/streaming endpoints.
 app.add_middleware(SlowAPIMiddleware)
 
-# ProxyAuthMiddleware must run after ProxyHeadersMiddleware (Starlette reverse order:
-# added before = runs after). Reads X-Auth-Request-Email set by oauth2-proxy and
-# injects the resolved user into request.state.proxy_user.
+# Starlette executes middleware in reverse registration order (last added = first to
+# run on the request).  Current request-path order:
+#   CORSMiddleware → SlowAPIMiddleware → ProxyHeadersMiddleware → RequestPerfMiddleware
+#   → ProxyAuthMiddleware → route handler
+#
+# ProxyAuthMiddleware is added last so it runs innermost — after ProxyHeadersMiddleware
+# has already normalised the client IP and scheme from proxy headers.
+# It reads X-Auth-Request-Email set by oauth2-proxy and injects the resolved user
+# into request.state.proxy_user.
 app.add_middleware(ProxyAuthMiddleware)
 
-# Add ProxyHeaders middleware FIRST to trust proxy headers (e.g., from Cloudflare)
-# This ensures FastAPI uses HTTPS in redirects when behind a proxy
+# Added after ProxyAuthMiddleware so it runs before it (outermost of these two).
+# Trusts proxy headers (X-Forwarded-For etc.) so FastAPI uses HTTPS in redirects.
 app.add_middleware(ProxyHeadersMiddleware, trusted_hosts="*")
 
 # Add CORS middleware
