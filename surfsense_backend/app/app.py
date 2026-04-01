@@ -31,6 +31,7 @@ from app.routes import router as crud_router
 from app.routes.auth_routes import router as auth_router
 from app.schemas import UserCreate, UserRead, UserUpdate
 from app.tasks.surfsense_docs_indexer import seed_surfsense_docs
+from app.middleware.proxy_auth import ProxyAuthMiddleware
 from app.users import SECRET, auth_backend, current_active_user, fastapi_users
 from app.utils.perf import get_perf_logger, log_system_snapshot
 
@@ -315,6 +316,11 @@ app.add_middleware(RequestPerfMiddleware)
 # http.response.start on every body chunk, breaking SSE/streaming endpoints.
 app.add_middleware(SlowAPIMiddleware)
 
+# ProxyAuthMiddleware must run after ProxyHeadersMiddleware (Starlette reverse order:
+# added before = runs after). Reads X-Auth-Request-Email set by oauth2-proxy and
+# injects the resolved user into request.state.proxy_user.
+app.add_middleware(ProxyAuthMiddleware)
+
 # Add ProxyHeaders middleware FIRST to trust proxy headers (e.g., from Cloudflare)
 # This ensures FastAPI uses HTTPS in redirects when behind a proxy
 app.add_middleware(ProxyHeadersMiddleware, trusted_hosts="*")
@@ -356,32 +362,34 @@ app.add_middleware(
     allow_headers=["*"],  # Allows all headers
 )
 
-app.include_router(
-    fastapi_users.get_auth_router(auth_backend),
-    prefix="/auth/jwt",
-    tags=["auth"],
-    dependencies=[Depends(rate_limit_login)],
-)
-app.include_router(
-    fastapi_users.get_register_router(UserRead, UserCreate),
-    prefix="/auth",
-    tags=["auth"],
-    dependencies=[
-        Depends(rate_limit_register),
-        Depends(registration_allowed),  # blocks registration when disabled
-    ],
-)
-app.include_router(
-    fastapi_users.get_reset_password_router(),
-    prefix="/auth",
-    tags=["auth"],
-    dependencies=[Depends(rate_limit_password_reset)],
-)
-app.include_router(
-    fastapi_users.get_verify_router(UserRead),
-    prefix="/auth",
-    tags=["auth"],
-)
+if not config.MPASS_PROXY_AUTH_ENABLED:
+    app.include_router(
+        fastapi_users.get_auth_router(auth_backend),
+        prefix="/auth/jwt",
+        tags=["auth"],
+        dependencies=[Depends(rate_limit_login)],
+    )
+    app.include_router(
+        fastapi_users.get_register_router(UserRead, UserCreate),
+        prefix="/auth",
+        tags=["auth"],
+        dependencies=[
+            Depends(rate_limit_register),
+            Depends(registration_allowed),  # blocks registration when disabled
+        ],
+    )
+    app.include_router(
+        fastapi_users.get_reset_password_router(),
+        prefix="/auth",
+        tags=["auth"],
+        dependencies=[Depends(rate_limit_password_reset)],
+    )
+    app.include_router(
+        fastapi_users.get_verify_router(UserRead),
+        prefix="/auth",
+        tags=["auth"],
+    )
+
 app.include_router(
     fastapi_users.get_users_router(UserRead, UserUpdate),
     prefix="/users",
@@ -391,7 +399,7 @@ app.include_router(
 # Include custom auth routes (refresh token, logout)
 app.include_router(auth_router)
 
-if config.AUTH_TYPE == "GOOGLE":
+if not config.MPASS_PROXY_AUTH_ENABLED and config.AUTH_TYPE == "GOOGLE":
     from fastapi.responses import RedirectResponse
 
     from app.users import google_oauth_client

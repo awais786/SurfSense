@@ -250,6 +250,12 @@ class Config:
     AUTH_TYPE = os.getenv("AUTH_TYPE")
     REGISTRATION_ENABLED = os.getenv("REGISTRATION_ENABLED", "TRUE").upper() == "TRUE"
 
+    # mPass proxy auth (oauth2-proxy ForwardAuth integration)
+    # Set MPASS_PROXY_AUTH_ENABLED=false to fall back to native email/password + Google OAuth.
+    MPASS_PROXY_AUTH_ENABLED = os.getenv("MPASS_PROXY_AUTH_ENABLED", "false").lower() == "true"
+    # Comma-separated path prefixes that bypass proxy auth (default: /health).
+    MPASS_BYPASS_PATHS = os.getenv("MPASS_BYPASS_PATHS", None)
+
     # Google OAuth
     GOOGLE_OAUTH_CLIENT_ID = os.getenv("GOOGLE_OAUTH_CLIENT_ID")
     GOOGLE_OAUTH_CLIENT_SECRET = os.getenv("GOOGLE_OAUTH_CLIENT_SECRET")
