@@ -124,44 +124,48 @@ class ProxyAuthMiddleware(BaseHTTPMiddleware):
                             )
                             return None
 
+                # Update last_login on every authenticated request (new and returning users).
+                try:
+                    await session.execute(
+                        update(User)
+                        .where(User.id == user.id)
+                        .values(last_login=datetime.now(UTC))
+                    )
+                    await session.commit()
+                except Exception:
+                    logger.warning(
+                        "ProxyAuth: failed to update last_login for %s", email
+                    )
+
                 if created:
                     # Trigger on_after_register so the default SearchSpace,
                     # RBAC roles and system prompts are created — same as
                     # Google OAuth and email/password signup.
                     # Use a fresh session so UserManager always has a clean connection.
+                    # Re-fetch user in reg_session to avoid DetachedInstanceError —
+                    # the user object from the outer session (or a rolled-back session
+                    # after an IntegrityError race) must not be used across sessions.
                     try:
                         from app.users import UserManager
 
                         async with async_session_maker() as reg_session:
-                            if config.AUTH_TYPE == "GOOGLE":
-                                from app.db import OAuthAccount
-
-                                user_db = SQLAlchemyUserDatabase(
-                                    reg_session, User, OAuthAccount
+                            reg_result = await reg_session.execute(
+                                select(User).where(User.id == user.id)
+                            )
+                            reg_user = reg_result.scalar_one_or_none()
+                            if reg_user is None:
+                                raise RuntimeError(
+                                    f"ProxyAuth: user {user.id} vanished before on_after_register"
                                 )
-                            else:
-                                user_db = SQLAlchemyUserDatabase(reg_session, User)
 
+                            user_db = SQLAlchemyUserDatabase(reg_session, User)
                             user_manager = UserManager(user_db)
-                            await user_manager.on_after_register(user, request=request)
+                            await user_manager.on_after_register(reg_user, request=request)
                     except Exception:
                         logger.exception(
                             "ProxyAuth: on_after_register failed for %s — "
                             "user created but default search space may be missing",
                             email,
-                        )
-                else:
-                    # Update last_login for returning users (mirrors on_after_login)
-                    try:
-                        await session.execute(
-                            update(User)
-                            .where(User.id == user.id)
-                            .values(last_login=datetime.now(UTC))
-                        )
-                        await session.commit()
-                    except Exception:
-                        logger.warning(
-                            "ProxyAuth: failed to update last_login for %s", email
                         )
 
                 return user
