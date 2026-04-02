@@ -399,15 +399,10 @@ if not config.MPASS_PROXY_AUTH_ENABLED:
         tags=["auth"],
     )
 
-app.include_router(
-    fastapi_users.get_users_router(UserRead, UserUpdate),
-    prefix="/users",
-    tags=["users"],
-)
-
-# fastapi-users' /users/me uses its own internal current_user dependency which
-# only validates JWT — it does not check request.state.proxy_user. Override it
-# with our own endpoints so proxy-auth users can access their profile.
+# Register /users/me BEFORE fastapi_users.get_users_router so our routes take
+# precedence (FastAPI first-match wins). fastapi-users' internal /users/me only
+# validates JWT — it does not check request.state.proxy_user set by the proxy
+# auth middleware, so proxy-auth users would always get 401 from that route.
 @app.get("/users/me", response_model=UserRead, tags=["users"])
 async def get_current_user_me(user: User = Depends(current_active_user)):
     return user
@@ -421,6 +416,13 @@ async def update_current_user_me(
     user_manager=Depends(get_user_manager),
 ):
     return await user_manager.update(user_update, user, safe=True, request=request)
+
+
+app.include_router(
+    fastapi_users.get_users_router(UserRead, UserUpdate),
+    prefix="/users",
+    tags=["users"],
+)
 
 
 # Include custom auth routes (refresh token, logout)
