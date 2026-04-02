@@ -18,6 +18,7 @@ logger = logging.getLogger(__name__)
 _password_helper = PasswordHelper()
 
 _DEFAULT_BYPASS_PATHS = ["/health"]
+_LAST_LOGIN_THROTTLE_SECONDS = 300
 
 
 def _normalise_email(email: str) -> str:
@@ -146,7 +147,6 @@ class ProxyAuthMiddleware(BaseHTTPMiddleware):
                 # FastAPI has no server-side session so this middleware runs on
                 # every request. Writing last_login unconditionally would add an
                 # UPDATE + COMMIT to every API call; throttling keeps it cheap.
-                _LAST_LOGIN_THROTTLE_SECONDS = 300
                 now = datetime.now(UTC)
                 needs_update = created or (
                     user.last_login is None
