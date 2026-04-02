@@ -32,7 +32,7 @@ from app.routes.auth_routes import router as auth_router
 from app.schemas import UserCreate, UserRead, UserUpdate
 from app.tasks.surfsense_docs_indexer import seed_surfsense_docs
 from app.middleware.proxy_auth import ProxyAuthMiddleware
-from app.users import SECRET, auth_backend, current_active_user, fastapi_users
+from app.users import SECRET, auth_backend, current_active_user, fastapi_users, get_user_manager
 from app.utils.perf import get_perf_logger, log_system_snapshot
 
 rate_limit_logger = logging.getLogger("surfsense.rate_limit")
@@ -404,6 +404,24 @@ app.include_router(
     prefix="/users",
     tags=["users"],
 )
+
+# fastapi-users' /users/me uses its own internal current_user dependency which
+# only validates JWT — it does not check request.state.proxy_user. Override it
+# with our own endpoints so proxy-auth users can access their profile.
+@app.get("/users/me", response_model=UserRead, tags=["users"])
+async def get_current_user_me(user: User = Depends(current_active_user)):
+    return user
+
+
+@app.patch("/users/me", response_model=UserRead, tags=["users"])
+async def update_current_user_me(
+    request: Request,
+    user_update: UserUpdate,
+    user: User = Depends(current_active_user),
+    user_manager=Depends(get_user_manager),
+):
+    return await user_manager.update(user_update, user, safe=True, request=request)
+
 
 # Include custom auth routes (refresh token, logout)
 app.include_router(auth_router)
