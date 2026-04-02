@@ -1,0 +1,90 @@
+services:
+
+  traefik:
+    image: traefik:v3.3
+    ports:
+      - "8929:8929"
+      - "8930:8080"   # Traefik dashboard
+    volumes:
+      - ./config/traefik/traefik.yml:/etc/traefik/traefik.yml:ro
+      - ./config/traefik/dynamic.yml:/etc/traefik/dynamic.yml:ro
+    networks:
+      - surfsense_local
+
+  oauth2-proxy:
+    image: quay.io/oauth2-proxy/oauth2-proxy:v7.7.1
+    environment:
+      OAUTH2_PROXY_PROVIDER: oidc
+      OAUTH2_PROXY_OIDC_ISSUER_URL: ${OIDC_BASE_URI}
+      OAUTH2_PROXY_CLIENT_ID: ${OIDC_CLIENT_ID}
+      OAUTH2_PROXY_CLIENT_SECRET: ${OIDC_CLIENT_SECRET}
+      OAUTH2_PROXY_COOKIE_SECRET: ${OAUTH2_PROXY_COOKIE_SECRET}
+      OAUTH2_PROXY_COOKIE_SECURE: "false"
+      OAUTH2_PROXY_COOKIE_NAME: _oauth2_proxy
+      OAUTH2_PROXY_COOKIE_SAMESITE: lax
+      OAUTH2_PROXY_HTTP_ADDRESS: 0.0.0.0:4180
+      OAUTH2_PROXY_REDIRECT_URL: http://localhost:8929/oauth2/callback
+      OAUTH2_PROXY_EMAIL_DOMAINS: "*"
+      OAUTH2_PROXY_SCOPE: "openid profile email"
+      OAUTH2_PROXY_UPSTREAMS: "static://202"
+      OAUTH2_PROXY_SKIP_PROVIDER_BUTTON: "true"
+      OAUTH2_PROXY_SET_XAUTHREQUEST: "true"
+      OAUTH2_PROXY_PASS_ACCESS_TOKEN: "false"
+    dns:
+      - 8.8.8.8
+      - 8.8.4.4
+    networks:
+      - surfsense_local
+    depends_on:
+      - traefik
+
+  db:
+    image: pgvector/pgvector:pg17
+    environment:
+      POSTGRES_USER: surfsense
+      POSTGRES_PASSWORD: surfsense
+      POSTGRES_DB: surfsense
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    networks:
+      - surfsense_local
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U surfsense"]
+      interval: 5s
+      retries: 5
+
+  redis:
+    image: redis:8-alpine
+    volumes:
+      - redisdata:/data
+    networks:
+      - surfsense_local
+
+  backend:
+    build:
+      context: ./surfsense_backend
+      dockerfile: Dockerfile
+    env_file:
+      - ./surfsense_backend/.env
+    environment:
+      DATABASE_URL: postgresql+asyncpg://surfsense:surfsense@db:5432/surfsense
+      CELERY_BROKER_URL: redis://redis:6379/0
+      CELERY_RESULT_BACKEND: redis://redis:6379/0
+      REDIS_APP_URL: redis://redis:6379/0
+      MPASS_PROXY_AUTH_ENABLED: "true"
+      NEXT_FRONTEND_URL: http://localhost:3929
+    networks:
+      - surfsense_local
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_started
+
+volumes:
+  pgdata:
+  redisdata:
+
+networks:
+  surfsense_local:
+    driver: bridge
