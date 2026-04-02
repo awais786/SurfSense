@@ -318,7 +318,10 @@ async def current_active_user(
         return proxy_user
     if jwt_user is not None:
         return jwt_user
-    raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED)
+    raise HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail="Not authenticated",
+    )
 
 
 async def current_optional_user(

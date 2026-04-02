@@ -52,10 +52,21 @@ class ProxyAuthMiddleware(BaseHTTPMiddleware):
 
     Set MPASS_PROXY_AUTH_ENABLED=false in .env to disable entirely.
 
-    Security note: header spoofing is not a concern on protected routes because
-    Traefik ForwardAuth overwrites X-Auth-Request-* headers before they reach
-    the app. Bypass paths never run this middleware, so spoofed headers there
-    have no effect either.
+    Security / trust model
+    ----------------------
+    This middleware trusts X-Auth-Request-Email unconditionally. That is safe
+    because:
+      1. Traefik ForwardAuth overwrites X-Auth-Request-* headers on every
+         request, so they cannot be spoofed by a browser or external client.
+      2. In production the app container does not expose its port externally —
+         only Traefik is public-facing, so there is no direct path to the app
+         that bypasses header rewriting.
+
+    A shared-secret header (set by oauth2-proxy, forwarded via Traefik
+    authResponseHeaders, checked here) would add defense-in-depth against a
+    misconfigured ingress but is not required given the network topology above.
+    Add it if the threat model ever changes (e.g. the app port becomes reachable
+    inside a zero-trust network where internal callers could forge headers).
     """
 
     def __init__(self, app):
@@ -130,18 +141,30 @@ class ProxyAuthMiddleware(BaseHTTPMiddleware):
                             )
                             return None
 
-                # Update last_login on every authenticated request (new and returning users).
-                try:
-                    await session.execute(
-                        update(User)
-                        .where(User.id == user.id)
-                        .values(last_login=datetime.now(UTC))
-                    )
-                    await session.commit()
-                except Exception:
-                    logger.warning(
-                        "ProxyAuth: failed to update last_login for %s", email
-                    )
+                # Update last_login at most once every 5 minutes per user.
+                # Unlike Plane (Django session — one DB write per login session),
+                # FastAPI has no server-side session so this middleware runs on
+                # every request. Writing last_login unconditionally would add an
+                # UPDATE + COMMIT to every API call; throttling keeps it cheap.
+                _LAST_LOGIN_THROTTLE_SECONDS = 300
+                now = datetime.now(UTC)
+                needs_update = created or (
+                    user.last_login is None
+                    or (now - user.last_login).total_seconds()
+                    > _LAST_LOGIN_THROTTLE_SECONDS
+                )
+                if needs_update:
+                    try:
+                        await session.execute(
+                            update(User)
+                            .where(User.id == user.id)
+                            .values(last_login=now)
+                        )
+                        await session.commit()
+                    except Exception:
+                        logger.warning(
+                            "ProxyAuth: failed to update last_login for %s", email
+                        )
 
                 if created:
                     # Trigger on_after_register so the default SearchSpace,

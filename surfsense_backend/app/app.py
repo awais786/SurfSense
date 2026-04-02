@@ -310,25 +310,28 @@ class RequestPerfMiddleware(BaseHTTPMiddleware):
 
 app.add_middleware(RequestPerfMiddleware)
 
-# Add SlowAPI middleware for automatic rate limiting
+# Starlette executes middleware in reverse registration order (last added = first to
+# run on the request).  Request-path execution order:
+#
+#   CORSMiddleware → ProxyHeadersMiddleware → SlowAPIMiddleware
+#   → ProxyAuthMiddleware → RequestPerfMiddleware → route handler
+#
+# SlowAPIMiddleware wraps ProxyAuthMiddleware so rate limiting fires before any DB
+# lookup — abusive traffic is shed at the limiter before we touch the database.
+# ProxyAuthMiddleware runs after ProxyHeadersMiddleware so the client IP/scheme
+# are already normalised when we resolve the user.
+
+# Innermost: reads X-Auth-Request-Email, resolves/creates user, sets request.state.proxy_user.
+app.add_middleware(ProxyAuthMiddleware)
+
+# Wraps ProxyAuthMiddleware — rate limiting fires before the DB lookup.
 # Uses Starlette BaseHTTPMiddleware (not the raw ASGI variant) to avoid
 # corrupting StreamingResponse — SlowAPIASGIMiddleware re-sends
 # http.response.start on every body chunk, breaking SSE/streaming endpoints.
 app.add_middleware(SlowAPIMiddleware)
 
-# Starlette executes middleware in reverse registration order (last added = first to
-# run on the request).  Current request-path order:
-#   CORSMiddleware → SlowAPIMiddleware → ProxyHeadersMiddleware → RequestPerfMiddleware
-#   → ProxyAuthMiddleware → route handler
-#
-# ProxyAuthMiddleware is added last so it runs innermost — after ProxyHeadersMiddleware
-# has already normalised the client IP and scheme from proxy headers.
-# It reads X-Auth-Request-Email set by oauth2-proxy and injects the resolved user
-# into request.state.proxy_user.
-app.add_middleware(ProxyAuthMiddleware)
-
-# Added after ProxyAuthMiddleware so it runs before it (outermost of these two).
-# Trusts proxy headers (X-Forwarded-For etc.) so FastAPI uses HTTPS in redirects.
+# Outermost of the inner three: trusts proxy headers (X-Forwarded-For etc.)
+# so FastAPI uses HTTPS in redirects when behind Traefik.
 app.add_middleware(ProxyHeadersMiddleware, trusted_hosts="*")
 
 # Add CORS middleware
