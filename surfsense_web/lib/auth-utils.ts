@@ -130,35 +130,56 @@ export function clearAllTokens(): void {
 }
 
 /**
- * Logout the current user by revoking the refresh token and clearing localStorage.
- * Returns true if logout was successful (or tokens were cleared), false otherwise.
+ * Logout the current user.
+ *
+ * When NEXT_PUBLIC_MPASS_PROXY_AUTH_ENABLED=true, performs 3-layer SSO logout:
+ *   Layer 1 — revoke JWT refresh tokens server-side
+ *   Layer 2 — clear _oauth2_proxy cookie via /oauth2/sign_out
+ *   Layer 3 — clear Cognito session via rd= redirect
+ *
+ * When proxy auth is off, revokes tokens and returns (caller handles redirect).
  */
 export async function logout(): Promise<boolean> {
 	const refreshToken = getRefreshToken();
 
-	// Call backend to revoke the refresh token
+	// Layer 1 — revoke the refresh token server-side
 	if (refreshToken) {
 		try {
 			const backendUrl = process.env.NEXT_PUBLIC_FASTAPI_BACKEND_URL || "http://localhost:8000";
 			const response = await fetch(`${backendUrl}/auth/jwt/revoke`, {
 				method: "POST",
-				headers: {
-					"Content-Type": "application/json",
-				},
+				headers: { "Content-Type": "application/json" },
 				body: JSON.stringify({ refresh_token: refreshToken }),
 			});
-
 			if (!response.ok) {
 				console.warn("Failed to revoke refresh token:", response.status, await response.text());
 			}
 		} catch (error) {
 			console.warn("Failed to revoke refresh token on server:", error);
-			// Continue to clear local tokens even if server call fails
 		}
 	}
 
-	// Clear all tokens from localStorage
 	clearAllTokens();
+
+	// Layers 2 + 3 — proxy auth SSO logout
+	if (
+		typeof window !== "undefined" &&
+		process.env.NEXT_PUBLIC_MPASS_PROXY_AUTH_ENABLED === "true"
+	) {
+		const oidcLogoutUrl = process.env.NEXT_PUBLIC_OIDC_LOGOUT_URL;
+		const oidcClientId = process.env.NEXT_PUBLIC_OIDC_CLIENT_ID;
+
+		if (oidcLogoutUrl && oidcClientId) {
+			const cognitoUrl = new URL(oidcLogoutUrl);
+			cognitoUrl.searchParams.set("client_id", oidcClientId);
+			cognitoUrl.searchParams.set("logout_uri", window.location.origin);
+
+			// oauth2-proxy clears the _oauth2_proxy cookie then follows rd= to Cognito
+			window.location.href = `/oauth2/sign_out?rd=${encodeURIComponent(cognitoUrl.toString())}`;
+			return true; // browser is already navigating away
+		}
+	}
+
 	return true;
 }
 
