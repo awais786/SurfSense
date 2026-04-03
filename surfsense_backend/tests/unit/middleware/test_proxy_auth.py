@@ -74,9 +74,7 @@ def _make_request(
     path: str = "/api/data",
     headers: dict[str, str] | None = None,
 ) -> Request:
-    raw_headers = [
-        (k.lower().encode(), v.encode()) for k, v in (headers or {}).items()
-    ]
+    raw_headers = [(k.lower().encode(), v.encode()) for k, v in (headers or {}).items()]
     scope = {
         "type": "http",
         "method": "GET",
@@ -455,9 +453,7 @@ class TestProxyAuthMiddlewareDispatch:
         fallback_result.scalar_one_or_none.return_value = race_user
         session.execute = AsyncMock(side_effect=[no_user_result, fallback_result])
         # INSERT commit raises IntegrityError; any subsequent commits should succeed
-        session.commit = AsyncMock(
-            side_effect=[IntegrityError(None, None, None), None]
-        )
+        session.commit = AsyncMock(side_effect=[IntegrityError(None, None, None), None])
         session_cm = _make_session_cm(session)
 
         with patch(

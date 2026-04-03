@@ -189,7 +189,9 @@ class ProxyAuthMiddleware(BaseHTTPMiddleware):
 
                             user_db = SQLAlchemyUserDatabase(reg_session, User)
                             user_manager = UserManager(user_db)
-                            await user_manager.on_after_register(reg_user, request=request)
+                            await user_manager.on_after_register(
+                                reg_user, request=request
+                            )
                     except Exception:
                         logger.exception(
                             "ProxyAuth: on_after_register failed for %s — "
@@ -200,7 +202,5 @@ class ProxyAuthMiddleware(BaseHTTPMiddleware):
                 return user
 
         except Exception:
-            logger.exception(
-                "ProxyAuth: unexpected error resolving user for %s", email
-            )
+            logger.exception("ProxyAuth: unexpected error resolving user for %s", email)
             return None

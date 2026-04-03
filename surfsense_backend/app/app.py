@@ -27,12 +27,18 @@ from app.agents.new_chat.checkpointer import (
 )
 from app.config import config, initialize_image_gen_router, initialize_llm_router
 from app.db import User, create_db_and_tables, get_async_session
+from app.middleware.proxy_auth import ProxyAuthMiddleware
 from app.routes import router as crud_router
 from app.routes.auth_routes import router as auth_router
 from app.schemas import UserCreate, UserRead, UserUpdate
 from app.tasks.surfsense_docs_indexer import seed_surfsense_docs
-from app.middleware.proxy_auth import ProxyAuthMiddleware
-from app.users import SECRET, auth_backend, current_active_user, fastapi_users, get_user_manager
+from app.users import (
+    SECRET,
+    auth_backend,
+    current_active_user,
+    fastapi_users,
+    get_user_manager,
+)
 from app.utils.perf import get_perf_logger, log_system_snapshot
 
 rate_limit_logger = logging.getLogger("surfsense.rate_limit")
@@ -398,6 +404,7 @@ if not config.MPASS_PROXY_AUTH_ENABLED:
         prefix="/auth",
         tags=["auth"],
     )
+
 
 # Register /users/me BEFORE fastapi_users.get_users_router so our routes take
 # precedence (FastAPI first-match wins). fastapi-users' internal /users/me only
