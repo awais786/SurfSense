@@ -254,7 +254,9 @@ class Config:
     # Defaults to false so open-source / self-hosted deployments without oauth2-proxy
     # are not accidentally locked out.  Set to true in your .env when SurfSense is
     # running behind Traefik + oauth2-proxy.
-    MPASS_PROXY_AUTH_ENABLED = os.getenv("MPASS_PROXY_AUTH_ENABLED", "false").lower() == "true"
+    MPASS_PROXY_AUTH_ENABLED = (
+        os.getenv("MPASS_PROXY_AUTH_ENABLED", "false").lower() == "true"
+    )
     # Comma-separated path prefixes that bypass proxy auth (default: /health).
     MPASS_BYPASS_PATHS = os.getenv("MPASS_BYPASS_PATHS", None)
 
