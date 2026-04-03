@@ -118,14 +118,18 @@ All existing route handlers that `Depends(current_active_user)` continue to work
 
 ---
 
-## Files to Create / Modify
+## Files Created / Modified
 
-| File | Action | Notes |
+| File | Status | Notes |
 |------|--------|-------|
-| `app/middleware/proxy_auth.py` | **Create** | Starlette middleware — core logic |
-| `app/users.py` | **Modify** | Override `current_active_user` / `current_optional_user` (last 2 lines) |
-| `app/app.py` | **Modify** | Register middleware; conditionally remove native auth routers |
-| `app/config/__init__.py` | **Modify** | Add `MPASS_PROXY_AUTH_ENABLED` env var |
+| `app/middleware/proxy_auth.py` | **Done** | Starlette middleware — core logic |
+| `app/users.py` | **Done** | Override `current_active_user` / `current_optional_user` |
+| `app/app.py` | **Done** | Register middleware; conditionally remove native auth routers; `/users/me` override |
+| `app/config/__init__.py` | **Done** | Added `MPASS_PROXY_AUTH_ENABLED` (default `false`), `MPASS_BYPASS_PATHS` |
+| `tests/unit/middleware/test_proxy_auth.py` | **Done** | 25 unit tests — all 10 SKILLS.md spec cases pass |
+| `docker-compose.local.yml` | **Done** | Standalone local dev stack (Traefik + oauth2-proxy + db + redis + backend) |
+| `config/traefik/traefik.yml` | **Done** | Single entrypoint `web` on port 8929 |
+| `config/traefik/dynamic.yml` | **Done** | ForwardAuth middleware; bypass routers for `/health` and `/oauth2` |
 
 ---
 
@@ -153,14 +157,15 @@ Design contract (mirrors `proxy_auth_core.py` design in Plane):
 - `IntegrityError` on concurrent creation → fallback to `select` by email,
   re-raise if user still not found
 
-### Core utilities — use `mpass-proxy-auth` PyPI package
+### Core utilities — inline (no PyPI package)
 
-```python
-from mpass_proxy_auth import normalise_email, is_bypass_path, coerce_bypass_paths
-```
+The helpers (`_normalise_email`, `_is_bypass_path`, `_coerce_bypass_paths`) are defined
+directly in `app/middleware/proxy_auth.py`. The `mpass-proxy-auth` PyPI package was
+considered but rejected — 12 lines, 2 apps, package overhead not worth it.
 
-`NEW_USER_FLAGS` from the package is Django-specific — do not use it.
-SurfSense uses `is_verified=True` instead of `is_email_verified=True`.
+Key difference from the Django/Plane version:
+- SurfSense uses `is_verified=True` (not `is_email_verified=True`)
+- No `NEW_USER_FLAGS` dict — fields are set explicitly on the `User(...)` constructor
 
 ---
 
@@ -226,7 +231,7 @@ ProxyAuthMiddleware     ← innermost (added last) — reads header, injects use
 Add to `Config` class:
 
 ```python
-MPASS_PROXY_AUTH_ENABLED = os.getenv("MPASS_PROXY_AUTH_ENABLED", "true").lower() == "true"
+MPASS_PROXY_AUTH_ENABLED = os.getenv("MPASS_PROXY_AUTH_ENABLED", "false").lower() == "true"
 MPASS_BYPASS_PATHS = os.getenv("MPASS_BYPASS_PATHS", None)  # optional override
 ```
 
@@ -307,9 +312,40 @@ patches/surfsense/
 
 ---
 
+## SurfSense-specific Implementation Notes
+
+### FastAPI stateless vs Django session-based
+
+Unlike Plane (Django), FastAPI has no server-side sessions. The middleware runs on **every
+single API call**, not once per login session. Consequences:
+
+- **`last_login` is throttled to once per 5 minutes** (`_LAST_LOGIN_THROTTLE_SECONDS = 300`)
+  to avoid an `UPDATE + COMMIT` on every request.
+- **`request.state.proxy_user`** lives only for the duration of a single request.
+  There is no equivalent of "already authenticated via session" — the DB check happens
+  every request (SELECT is cheap; mitigate further with Redis cache if needed).
+
+### FastAPI route precedence
+
+FastAPI uses **first-match routing**. `/users/me` override must be registered
+**before** `app.include_router(fastapi_users.get_users_router(...))`, otherwise
+fastapi-users' internal JWT-only route wins and `current_active_user` is never called.
+
+### Two-session pattern for `on_after_register`
+
+After creating a new user, `on_after_register` is triggered in a **fresh session** to
+avoid `DetachedInstanceError`. The user object is re-fetched in `reg_session` by `user.id`
+(which is a Python-level UUID generated at object construction, not a DB serial).
+
+---
+
 ## Open Questions
 
-1. **Frontend behaviour** — does the web app call `/auth/jwt/refresh` on load to check token validity? If proxy auth is on, it may receive a 404. Confirm whether frontend needs a `/verify-token`-style check instead.
-2. **Connector OAuth** (Google Drive, Gmail, Calendar) — these use separate OAuth flows for *connectors*, not user auth. They must remain unaffected.
-3. **Display name sync** — Cognito can pass a name claim via oauth2-proxy `--pass-user-headers`. Do we want to populate `display_name` from `X-Auth-Request-User` or a separate header on first creation?
-4. **Exact upstream SurfSense commit to patch against.**
+1. **Frontend behaviour** — does the web app call `/auth/jwt/refresh` on load? If proxy
+   auth is on and that route is removed, the frontend may break. Confirm before removing.
+2. **Connector OAuth** (Google Drive, Gmail, Calendar) — these use separate OAuth flows
+   for *connectors*, not user auth. They must remain unaffected by this change.
+3. **Display name sync** — Cognito can pass a name claim. Populate `display_name` from
+   a separate header on first creation? Currently left `None`.
+4. **Redis cache for middleware** — avoid the per-request SELECT with a short-lived
+   Redis cache keyed by email. Not yet implemented.
