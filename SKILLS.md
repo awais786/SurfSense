@@ -296,17 +296,68 @@ Three layers must be cleared in sequence:
 | 2     | `_oauth2_proxy` cookie | `GET /oauth2/sign_out`                                   |
 | 3     | OIDC provider session  | `GET <provider-logout-url>?client_id=...&logout_uri=...` |
 
-**Frontend logout pattern:**
+Layers 2 and 3 chain via a single redirect: `/oauth2/sign_out` clears the cookie then
+follows `?rd=` to the provider, which clears the SSO session and redirects back to the app.
+
+**Frontend logout pattern (framework-agnostic):**
 
 ```javascript
 async function signOut() {
-  await appLogout(); // clears Layer 1
+  // Layer 1 — clear app session / revoke tokens
+  await appLogout();
 
-  const providerLogout = `${OIDC_LOGOUT_URL}?client_id=${OIDC_CLIENT_ID}&logout_uri=${encodeURIComponent(window.location.origin)}`;
-  window.location.href = `/oauth2/sign_out?rd=${encodeURIComponent(providerLogout)}`;
-  // clears Layer 2 then redirects to provider to clear Layer 3
+  // Layers 2 + 3 — build provider logout URL safely, then chain through oauth2-proxy
+  const cognitoUrl = new URL(OIDC_LOGOUT_URL);
+  cognitoUrl.searchParams.set("client_id", OIDC_CLIENT_ID);
+  cognitoUrl.searchParams.set("logout_uri", window.location.origin);
+
+  window.location.href = `/oauth2/sign_out?rd=${encodeURIComponent(cognitoUrl.toString())}`;
 }
 ```
+
+**SurfSense implementation** (`surfsense_web/lib/auth-utils.ts`):
+
+```typescript
+export async function logout(): Promise<boolean> {
+  // Layer 1 — revoke JWT refresh tokens server-side
+  const refreshToken = getRefreshToken();
+  if (refreshToken) {
+    await fetch(`${backendUrl}/auth/jwt/revoke`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ refresh_token: refreshToken }),
+    });
+  }
+  clearAllTokens();
+
+  // Layers 2 + 3 — proxy auth SSO logout
+  if (process.env.NEXT_PUBLIC_MPASS_PROXY_AUTH_ENABLED === "true") {
+    const cognitoUrl = new URL(process.env.NEXT_PUBLIC_OIDC_LOGOUT_URL);
+    cognitoUrl.searchParams.set("client_id", process.env.NEXT_PUBLIC_OIDC_CLIENT_ID);
+    cognitoUrl.searchParams.set("logout_uri", window.location.origin);
+    window.location.href = `/oauth2/sign_out?rd=${encodeURIComponent(cognitoUrl.toString())}`;
+    return true; // browser navigating away — caller's redirect never executes
+  }
+
+  return true; // caller handles redirect in non-proxy mode
+}
+```
+
+**Env vars required (frontend):**
+```
+NEXT_PUBLIC_MPASS_PROXY_AUTH_ENABLED=true
+NEXT_PUBLIC_OIDC_LOGOUT_URL=https://<cognito-domain>/logout
+NEXT_PUBLIC_OIDC_CLIENT_ID=<cognito-app-client-id>
+```
+
+**Gotcha — `logout_uri` must be registered in Cognito** under Allowed sign-out URLs for
+the app client. Add `http://localhost:<port>` for dev and `https://<host>` for prod.
+Cognito rejects the redirect if it doesn't exactly match (http vs https matters).
+
+**SSO logout across multiple apps** — because all apps share one `_oauth2_proxy` cookie,
+clearing it via `/oauth2/sign_out` logs the user out of every app simultaneously.
+The single shared oauth2-proxy instance is what makes this work — each app must point
+its Traefik ForwardAuth at the **same** oauth2-proxy, not separate instances.
 
 ---
 
